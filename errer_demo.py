@@ -1,32 +1,29 @@
 import pybullet as p
-import time
 import numpy as np
 import pybullet_data
+import panda_gym
 
 
 
-def setCameraAndGetPic(robot_id:int, width:int=300, height:int=300, client_id:int=0):
+
+def setCameraAndGetPic(robot_id, ee_link:int=11, width:int=300, height:int=300, client_id:int=0):
     
-    finger1_pos = np.array(p.getLinkState(robot_id,linkIndex=9)[0])
-    finger2_pos = np.array(p.getLinkState(robot_id,linkIndex=10)[0])
-    hand_pos = np.array(p.getLinkState(robot_id,linkIndex=8)[0])
-    hand_orien_matrix = p.getMatrixFromQuaternion(p.getLinkState(robot_id,linkIndex=8)[1])
+    ee_position = np.array(p.getLinkState(robot_id,linkIndex=ee_link)[0])
+    hand_orien_matrix = p.getMatrixFromQuaternion(p.getLinkState(robot_id,linkIndex=ee_link)[1])
     z_vec = np.array([hand_orien_matrix[2],hand_orien_matrix[5],hand_orien_matrix[8]])
 
-    camera_pos = (finger1_pos + finger2_pos)/2 + z_vec
-    target_pos = hand_pos + 5*z_vec
+    camera_pos = ee_position + 0.02*z_vec
+    target_pos = ee_position + 0.25*z_vec
 
     view_matrix = p.computeViewMatrix(
         cameraEyePosition = camera_pos,
         cameraTargetPosition = target_pos,
-        cameraUpVector = z_vec,
-        physicsClientId=client_id)
+        cameraUpVector = [0,1,0])
     projection_matrix = p.computeProjectionMatrixFOV(
         fov=50.0,
         aspect=1.0,
-        nearVal=0.015,
-        farVal=2,
-        physicsClientId=client_id)
+        nearVal=0.001,
+        farVal=100)
     
     width, height, rgbImg, depthImg, segImg = p.getCameraImage(
         width=width,
@@ -41,65 +38,160 @@ def setCameraAndGetPic(robot_id:int, width:int=300, height:int=300, client_id:in
 
 
 
-physicsClient = p.connect(p.GUI)
-# p.configureDebugVisualizer(p.COV_ENABLE_GUI,0)
+
+
+
+
+
+
+
+client = p.connect(p.GUI)
 p.setAdditionalSearchPath(pybullet_data.getDataPath())
-p.setGravity(0,0,-10)
-planeID = p.loadURDF("plane.urdf")
-startPos = np.array([0,0,0.01],dtype=np.float32)
-startOrientation = p.getQuaternionFromEuler([0,0,0])
-robotId = p.loadURDF("franka_panda/panda.urdf",startPos,startOrientation,useFixedBase=True)
-p.resetBasePositionAndOrientation(robotId,startPos,startOrientation)
+
+
+p.loadURDF("plane.urdf", [0, 0, -0.3])
+frankaId = p.loadURDF("franka_panda/panda.urdf", [0, 0, 0], useFixedBase=True)
+p.resetBasePositionAndOrientation(frankaId, [0, 0, -0.3], [0, 0, 0, 1])
+
+# objectId = p.loadURDF("franka_panda/panda.urdf")
+# p.resetBasePositionAndOrientation(objectId, [1, 1, 0], [0, 0, 0, 1])
+
+
+path = '/home/dukaifeng/my_project/panda_project/obj_models/Tennis Ball-1.obj'
+
+visual_shape_id = p.createVisualShape(
+    shapeType=p.GEOM_MESH,
+    fileName=path,
+    visualFramePosition=[0,0,0],
+    meshScale=[0.0005,0.0005,0.0005]  
+)
+
+
+collision_shape_id = p.createCollisionShape(
+    shapeType=p.GEOM_MESH,
+    fileName=path,
+    collisionFramePosition=[0,0,0],
+    meshScale=[0.0005,0.0005,0.0005]   
+)
+
+
+objectId = p.createMultiBody(
+    baseMass=1,
+    baseCollisionShapeIndex=collision_shape_id,
+    baseVisualShapeIndex=visual_shape_id,
+    basePosition=[0.5, 0, 0.05],
+    useMaximalCoordinates=True
+)
+
+
+p.resetBasePositionAndOrientation(objectId, [0.5, 0, -0.15], [0, 1, 0, 1])
 
 
 
 
-joint_active_ids = np.array([0,1,2,3,4,5,6,9,10])
 
-#正常
-for i in range(10000):
-    euler_angle = np.array([0,0,0])
-    robot_end_orientation = p.getQuaternionFromEuler(euler_angle)
-    joint_states = p.calculateInverseKinematics(robotId,11,[0.35,0.35,0.4],robot_end_orientation)
 
-    p.setJointMotorControlArray(robotId,joint_active_ids,p.POSITION_CONTROL,targetPositions=joint_states)
+
+
+prevPose = [0, 0, 0]
+prevPose1 = [0, 0, 0]
+hasPrevPose = 0
+
+
+
+ee_Index = 11
+joint_active_ids = [0,1,2,3,4,5,6,9,10]
+# lower_limits = [-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973, -5, -5]
+# upper_limits = [ 2.8973,  1.7628,  2.8973, -0.0698,  2.8973,  3.7525,  2.8973,  5,  5]
+# joint_ranges = [ul-ll for ul,ll in zip(upper_limits,lower_limits)]
+rest_poses   = [0.00, 0.41, 0.00, -1.85, 0.00, 2.26, 0.79, 0.1, 0.1]
+
+
+
+for i,j in enumerate(joint_active_ids):
+    p.resetJointState(frankaId, j, rest_poses[i])
+
+
+
+p.setGravity(0, 0, -9.8)
+t = 0.
+p.setRealTimeSimulation(1)
+trailDuration = 20
+
+
+
+while True:
+    t += 0.1
     p.stepSimulation()
-    width, height, rgbImg, depthImg, segImg = setCameraAndGetPic(robot_id=robotId)
-    time.sleep(1/200)
+    print(t)
+
+    for i in range(3):
+        ee_position = np.array([0.5+0.15*np.sin(t), 0.15*np.cos(t), 0.15])
+
+        ee_orientation = p.getQuaternionFromEuler([-np.pi,0,0])
+
+        joint_poses = p.calculateInverseKinematics(frankaId,ee_Index,ee_position,ee_orientation,)
+        
+        for i,j in enumerate(joint_active_ids):
+            p.setJointMotorControl2(frankaId,
+                                    jointIndex=j,
+                                    controlMode=p.POSITION_CONTROL,
+                                    targetPosition=joint_poses[i],
+                                    targetVelocity=0,
+                                    force=500,
+                                    positionGain=0.03,
+                                    velocityGain=1)
+
+        _,_,_,depthImg,_ = setCameraAndGetPic(robot_id=frankaId)
+
+
+    # ls = p.getLinkState(frankaId, ee_Index)
+    # if (hasPrevPose):
+    #     p.addUserDebugLine(prevPose, ee_position, [0, 0, 0.3], 1, trailDuration)
+    #     p.addUserDebugLine(prevPose1, ls[4], [1, 0, 0], 1, trailDuration)
+    # prevPose = ee_position
+    # prevPose1 = ls[4]
+    # hasPrevPose = 1
+
+
+
+    a = p.getLinkState(frankaId, ee_Index)[0]
+    hand_orien_matrix = p.getMatrixFromQuaternion(p.getLinkState(frankaId,linkIndex=ee_Index)[1])
+    z_vec = np.array([hand_orien_matrix[2],hand_orien_matrix[5],hand_orien_matrix[8]])
+    pos = [0.2*x+y for x,y in zip(z_vec,a)]
+    if (hasPrevPose):
+        p.addUserDebugLine(prevPose, pos, [0, 0, 0.3], 2, trailDuration)
+    prevPose = pos
+    hasPrevPose = 1
+
+
+    # print(f"\n\n\n\n\n{pos}\n{type(pos)}\n\n\n\n")
+    print(pybullet_data.getDataPath())
+
+
+
 
 
 p.disconnect()
 
 
 
-#更改欧拉角度机械臂位置不正确
-'''for i in range(10000):
-    euler_angle = np.array([0,np.pi,0])
-    robot_end_orientation = p.getQuaternionFromEuler(euler_angle)
-    joint_states = p.calculateInverseKinematics(robotId,11,[0.35,0.35,0.4],robot_end_orientation)
-
-    p.setJointMotorControlArray(robotId,joint_active_ids,p.POSITION_CONTROL,targetPositions=joint_states)
-    p.stepSimulation()
-    width, height, rgbImg, depthImg, segImg = setCameraAndGetPic(robot_id=robotId)
-    time.sleep(1/200)
-
-
-p.disconnect()'''
 
 
 
 
-#放在循环外机械臂位置不正确
-'''euler_angle = np.array([0,0,0])
-robot_end_orientation = p.getQuaternionFromEuler(euler_angle)
-joint_states = p.calculateInverseKinematics(robotId,11,[0.35,0.35,0.4],robot_end_orientation)
-
-for i in range(10000):
-    p.setJointMotorControlArray(robotId,joint_active_ids,p.POSITION_CONTROL,targetPositions=joint_states)
-    p.stepSimulation()
-    width, height, rgbImg, depthImg, segImg = setCameraAndGetPic(robot_id=robotId)
-    time.sleep(1/200)
 
 
-p.disconnect()'''
+
+
+    # if i==100:
+    #     current_joint_states = list(p.getJointStates(robotId,joint_active_ids))
+    #     actual_joint_states = [x[0] for x in current_joint_states]
+    #     print('-------------------------------------------------\n')
+    #     print("ideal_joint_states:{}".format(joint_states[:7]))
+    #     print("actual_joint_states:{}".format(actual_joint_states[:7]))
+    #     print("ideal_finger_states:{}".format(joint_states[7:]))
+    #     print("actual_finger_states:{}".format(actual_joint_states[7:]))
+    #     print('\n-------------------------------------------------')
+
 

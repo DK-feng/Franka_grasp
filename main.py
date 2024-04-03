@@ -8,6 +8,7 @@ import pybullet as p
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+import time
 
 
 
@@ -19,21 +20,18 @@ class MyRobot(PyBulletRobot):
             body_name='franka',
             file_name='franka_panda/panda.urdf',
             base_position=np.array([0,0,0]),
-            action_space=spaces.Box(-1.0, 1.0, shape=(8,), dtype=np.float32),
             joint_indices=np.array([0,1,2,3,4,5,6,9,10]),
-            joint_forces=np.array([87.0, 87.0, 87.0, 87.0, 12.0, 120.0, 120.0, 170.0, 170.0])
+            action_space=spaces.Box(-1.0, 1.0, shape=(8,), dtype=np.float32),
+            joint_forces=np.array([187.0, 187.0, 187.0, 187.0, 120.0, 120.0, 120.0, 170.0, 170.0])
         )
         self.finger_indices = np.array([9,10])
         self.ee_link = 11
+        self.neutral_joint_state = np.array([0.00, 0.41, 0.00, -1.85, 0.00, 2.26, 0.79, 0.00, 0.00])  
 
-        self.neutral_position = np.array([0.35, 0.35, 0.5])         #中立位置
-        self.neutral_orientation_urler = np.array([np.pi, 0, 0])    #中立姿态
-        self.neutral_orientation_quaternion = p.getQuaternionFromEuler(self.neutral_orientation_urler)
-        self.neutral_joint_state = self.sim.inverse_kinematics(self.body_name,
-                                                                 self.ee_link,
-                                                                 self.neutral_position,
-                                                                 self.neutral_orientation_quaternion)
-        self.neutral_joint_state = np.concatenate((self.neutral_joint_state[:7], np.array([0.02 , 0.02])))  
+        self.sim.set_lateral_friction(self.body_name, self.finger_indices[0], lateral_friction=1.0)
+        self.sim.set_lateral_friction(self.body_name, self.finger_indices[1], lateral_friction=1.0)
+        self.sim.set_spinning_friction(self.body_name, self.finger_indices[0], spinning_friction=0.001)
+        self.sim.set_spinning_friction(self.body_name, self.finger_indices[1], spinning_friction=0.001)
         self.sim.create_plane(z_offset=-0.3)
         self.sim.create_table(length=2,width=2,height=0.3)
 
@@ -42,6 +40,7 @@ class MyRobot(PyBulletRobot):
         if type(action)==list:
             for action in action:
                 self.control_joints(action)
+                time.sleep(0.02)
         else:
             self.control_joints(action)
 
@@ -70,7 +69,8 @@ class MyRobot(PyBulletRobot):
     
     def _inverse_kinematics(self,desired_ee_position,desired_ee_orientation):
         #更方便的逆运动学
-        action =  self.sim.inverse_kinematics(self.body_name, self.ee_link, desired_ee_position, desired_ee_orientation)
+        action =  self.sim.inverse_kinematics(self.body_name, self.ee_link,
+                                              desired_ee_position, desired_ee_orientation)
         return action
 
     def _vertical_move(self, distance:int):
@@ -91,26 +91,22 @@ class MyRobot(PyBulletRobot):
 
     def setCameraAndGetPic(self, width:int=300, height:int=300, client_id:int=0):
         #设置虚拟摄像头,位于两爪子之间,图片为300*300,匹配神经网络输入
-        finger1_pos = self.get_link_position(self.finger_indices[0])
-        finger2_pos = self.get_link_position(self.finger_indices[1])
-        hand_pos = self.get_link_position(self.ee_link)
+        ee_position = self.get_link_position(self.ee_link)
         hand_orien_matrix = p.getMatrixFromQuaternion(self.sim.get_link_orientation(self.body_name, self.ee_link))
         z_vec = np.array([hand_orien_matrix[2],hand_orien_matrix[5],hand_orien_matrix[8]])
 
-        camera_pos = (finger1_pos + finger2_pos)/2 + z_vec  #加上一个z轴方向向量防止摄像头位于机械臂内部
-        target_pos = hand_pos + 5*z_vec     #摄像头视角总指向夹爪正前方
+        camera_pos = ee_position + 0.02*z_vec  #加上一个z轴方向向量防止摄像头位于机械臂内部
+        target_pos = ee_position + 0.3*z_vec     #摄像头视角总指向夹爪正前方
 
         view_matrix = p.computeViewMatrix(
             cameraEyePosition = camera_pos,
             cameraTargetPosition = target_pos,
-            cameraUpVector = z_vec,
-            physicsClientId=client_id)
+            cameraUpVector = [0,1,0])
         projection_matrix = p.computeProjectionMatrixFOV(
             fov=50.0,
             aspect=1.0,
-            nearVal=0.015,
-            farVal=2,
-            physicsClientId=client_id)
+            nearVal=0.01,
+            farVal=20)
     
         width, height, rgbImg, depthImg, segImg = p.getCameraImage(
             width=width,
@@ -118,7 +114,7 @@ class MyRobot(PyBulletRobot):
             viewMatrix=view_matrix,
             projectionMatrix=projection_matrix,
             renderer=p.ER_BULLET_HARDWARE_OPENGL)
-    
+        
         return width, height, rgbImg, depthImg, segImg
 
     def processing_ggcnnOutput(self,GGCNN_output):
@@ -130,17 +126,19 @@ class MyRobot(PyBulletRobot):
         width = GGCNN_output[3].cpu().numpy().reshape(-1)[index]
         row_index, column_index = index//300 +1, index%300 +1
 
+        print(index,'\n',cos2,'\n',sin2,'\n',width)
+        print('-----------------------------------------------------------')
+
         ee_position = self.sim.get_link_position(self.body_name,self.ee_link)
 
         #根据抓取点在图像中不同的位置来不断微调desired_position,每次微调下降0.1cm
-        desired_position = ee_position + np.array([(150-column_index)/300, (row_index-150)/300, -0.001])
+        desired_position = ee_position + 0.01*np.array([(150-column_index)/300, (row_index-150)/300, -0.1])
         theta = np.arctan(sin2/cos2)/2        #是弧度并非角度
         desired_orientation = p.getQuaternionFromEuler(np.array([np.pi, 0, theta]))     
-        new_joints_state = self.sim.inverse_kinematics(self.body_name, self.ee_link, desired_position, desired_orientation)
+        new_joints_state = self._inverse_kinematics(desired_position, desired_orientation)
         new_action = np.concatenate([new_joints_state[:7], np.array([width+0.02, width+0.02])])
         return new_action
   
-
 
 
 class MyTask(Task):
@@ -161,12 +159,12 @@ class MyTask(Task):
                             rgba_color=np.array([255,255,255,100]),)
 
     def reset(self):
-        #随机生成物体和目标点
-        object_location = np.random.uniform(low=0.25, high=0.45, size=2)
-        object_position = np.concatenate((object_location, np.array([0.025])))
+        #随机生成物体和目标点 '''---------------------------------------------------------------------------
+        # object_location = np.random.uniform(low=0.25, high=0.45, size=2)
+        object_position = np.concatenate(((np.array([0.6,0])), np.array([0.03])))
         object_orientation = np.random.uniform(low=-1,high=1,size=4)
         target_location = np.random.uniform(low=-0.6, high=-0.2, size=2)
-        target_position = np.concatenate((target_location, np.array([0.025])))
+        target_position = np.concatenate((target_location, np.array([0.03])))
         target_orientation = np.random.uniform(low=-1,high=1,size=4)
         self.sim.set_base_pose(body='object', position=object_position, orientation=object_orientation)
         self.sim.set_base_pose(body='target',position=target_position,orientation=target_orientation)
@@ -260,18 +258,20 @@ class MyRobotTaskEnv(RobotTaskEnv):
 
     def get_action(self):
         #调整阶段
+        
         if self.adjust:
             _,_,_,depthImg,_ = self.robot.setCameraAndGetPic()
             GGCNN_input = torch.tensor(depthImg).unsqueeze(0).unsqueeze(0).to(self.DEVICE)
             GGCNN_output = self.net(GGCNN_input)
             action = self.robot.processing_ggcnnOutput(GGCNN_output)
             ee_position = self.robot._get_ee_position()
-            if ee_position[2] <= 0.2:       #只在摄像头高度大于20cm时微调,若小于这个距离,摄像头会失焦
-                self.adjust = False     
+            if ee_position[2] <= 0.15:       #只在摄像头高度大于15cm时微调,若小于这个距离,摄像头会失焦
+                self.adjust = False
+            print(111111111111111)     
             return action
 
         else:       #否则执行抓取程序
-            action_1 = self.robot._vertical_move(-0.19)     #下降19cm
+            action_1 = self.robot._vertical_move(-0.14)     #下降14cm
             action_2 = self.robot._grip(-0.02)              #夹紧
             action_3 = self.robot._vertical_move(0.3)       #升高30cm
             action_4 = self._delivery()                     #送到目标点上空20cm,并调整好姿态
@@ -279,6 +279,7 @@ class MyRobotTaskEnv(RobotTaskEnv):
             action_6 = self.robot._grip(0.02)               #松开夹爪
             action_7 = self.robot._vertical_move(0.3)       #升高30cm
             self.adjust = True
+            print(222222222222222222222222222222222222222222222222222222)
             return [action_1,action_2,action_3,action_4,action_5,action_6,action_7]
 
     def _delivery(self):
@@ -290,8 +291,6 @@ class MyRobotTaskEnv(RobotTaskEnv):
         finger_width = self.robot._get_finger_width()/2
         action = np.concatenate([action[:7], np.array([finger_width,finger_width])])
         return action
-
-
 
 
 
@@ -308,6 +307,6 @@ if __name__ == "__main__":
         if terminated or truncated:
             observation, info = env.reset()
 
-
+        time.sleep(0.01)
 
 
