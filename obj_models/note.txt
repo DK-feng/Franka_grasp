@@ -1,0 +1,3 @@
+'Glock'             meshScale = [0.02, 0.02, 0.02]
+'Mickey Mouse'      meshScale = [0.0004, 0.0004, 0.0004]
+'Nut & Bolt'        meshScale = [5,5,5]
