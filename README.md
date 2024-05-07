@@ -1,7 +1,8 @@
 Objective: Establish a robotic arm simulation environment for grasping tasks
 
 Results:
-![img](https://github.com/DK-feng/Franka_grasp/blob/main/GIF_folder/result.gif=50*50)
+![img](https://github.com/DK-feng/Franka_grasp/blob/main/GIF_folder/result.gif)
+<img src='https://github.com/DK-feng/Franka_grasp/blob/main/GIF_folder/result.gif' width='100px'>
 
 Problem haven't solved:
   1:Abnormal movement of the robotic arm (shown below)
