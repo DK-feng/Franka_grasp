@@ -230,12 +230,12 @@ class MyTask(Task):
 
     def reset(self):
         #随机生成物体和目标点 '''---------------------------------------------------------------------------
-        object_x = np.random.uniform(low=0.3, high=0.4, size=1)
-        object_y = np.random.uniform(low=-0.6, high=-0.5, size=1)
+        object_x = np.random.uniform(low=0.3, high=0.5, size=1)
+        object_y = np.random.uniform(low=-0.6, high=-0.4, size=1)
         object_position = np.concatenate((object_x, object_y, np.array([0.03])))
         object_orientation = np.random.uniform(low=-0.2,high=0.2,size=4)
         object_orientation += np.array([0.0, 0.86, 0.00, -0.5]) 
-        target_y = np.random.uniform(low=0.4, high=0.6, size=1)
+        target_y = np.random.uniform(low=0.3, high=0.7, size=1)
         target_position = np.concatenate((np.array([0.4]), target_y, np.array([0.01])))
         # target_orientation = np.random.uniform(low=-1,high=1,size=4)
         target_orientation = np.array([0,0,0,1])
@@ -344,11 +344,11 @@ class MyRobotTaskEnv(RobotTaskEnv):
 
         if self.stage == 0.1:
             self.counter += 1
-            action = self.robot._inverse_kinematics(self.current_position + self.counter/300*self.position_change,
+            action = self.robot._inverse_kinematics(self.current_position + self.counter/400*self.position_change,
                                                     self.robot._get_ee_orientation())
             action = np.concatenate([action[:7], np.array([self.robot._get_finger_width()/2, 
                                                            self.robot._get_finger_width()/2])])
-            if self.counter > 300:
+            if self.counter > 400:
                 self.counter = 0
                 self.stage = 1.0
             print('Moving......')
@@ -401,58 +401,67 @@ class MyRobotTaskEnv(RobotTaskEnv):
 
         # other movement
         if self.stage == 2.0:
-            action_1 = self.robot._vertical_move(-0.0003)     #下降
+            action_2 = self.robot._vertical_move(-0.0003)     #下降
             if self.robot._get_ee_position()[2] < 0.03:
                 self.stage = 3.0
-                self.stage_2_num = 0
+                self.stage_3_num = 0
             print('Downward......')
-            return action_1
+            return action_2
 
         if self.stage == 3.0:
-            self.stage_2_num += 1
-            action_2 = self.robot._grip(-0.0005)
-            if self.stage_2_num >= 300:
+            self.stage_3_num += 1
+            action_3 = self.robot._grip(-0.0005)
+            if self.stage_3_num >= 300:
                 self.stage = 4.0
-                self.stage_3_num = 0
+                self.stage_4_num = 0
                 self.finger_width = self.robot._get_finger_width()/2
                 goal_info = self.task.get_goal()
                 self.ee_info = self.robot.get_obs()
                 self.position_change = goal_info[:3] + np.array([0,0,0.2]) - self.ee_info[:3]
             print('Grasping......')
-            return action_2
+            return action_3
         
         if self.stage == 4.0:
-            self.stage_3_num += 1
-            action = self.robot._inverse_kinematics(self.ee_info[:3] + self.stage_3_num/500*self.position_change,
+            self.stage_4_num += 1
+            action = self.robot._inverse_kinematics(self.ee_info[:3] + self.stage_4_num/500*self.position_change,
                                                     self.ee_info[3:])
-            action_3 = np.concatenate([action[:7], np.array([self.finger_width-0.01,self.finger_width-0.01])])
+            action_4 = np.concatenate([action[:7], np.array([self.finger_width-0.01,self.finger_width-0.01])])
             print('Deliverying......')
-            if self.stage_3_num > 500:
+            if self.stage_4_num > 500:
                 self.stage = 5.0
-            return action_3
+            return action_4
 
         if self.stage == 5.0:
-            action_4 = self.robot._vertical_move(-0.001,tight=True)
+            action_5 = self.robot._vertical_move(-0.001,tight=True)
             if self.robot._get_ee_position()[2] < 0.04:
                 self.stage = 6.0
-                self.stage_5_num = 0
+                self.stage_6_num = 0
             print('Downward......')
-            return action_4
+            return action_5
         
         if self.stage == 6.0:
-            self.stage_5_num += 1
-            action_5 = self.robot._grip(0.0001)
-            if self.stage_5_num > 200:
+            self.stage_6_num += 1
+            action_6 = self.robot._grip(0.0001)
+            if self.stage_6_num > 200:
                 self.stage = 7.0
             print('Loosening......')
-            return action_5
+            return action_6
 
         if self.stage == 7.0:
-            action_6 = self.robot._vertical_move(0.001)    
+            action_7 = self.robot._vertical_move(0.001)    
             if self.robot._get_ee_position()[2] > 0.3:
-                self.stage = 0.0
+               self.stage = 8.0
             print('Upward......')
-            return action_6
+            return action_7
+
+        if self.stage == 8.0:
+            time.sleep(0.3)
+            self.reset()
+            self.stage = 0.0
+            self.counter = 0
+            time.sleep(0.3)
+            action_8 = self.robot._vertical_move(0) 
+            return action_8
 
     def _delivery(self):
         #送到目标点上空20cm并调整姿态
@@ -474,7 +483,7 @@ if __name__ == "__main__":
     env = MyRobotTaskEnv()
     observation, info = env.reset()
 
-    for _ in range(10000):
+    for _ in range(1000000):
         action = env.get_action()
         observation, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
