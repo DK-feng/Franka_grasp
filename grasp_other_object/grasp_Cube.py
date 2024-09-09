@@ -12,8 +12,6 @@ import time
 from skimage.filters import gaussian
 import cv2
 
-
-
 class MyRobot(PyBulletRobot):
 
     def __init__(self,sim):
@@ -109,7 +107,7 @@ class MyRobot(PyBulletRobot):
             cameraUpVector = [0,1,0])
         
         projection_matrix = p.computeProjectionMatrixFOV(
-            fov=80.0,
+            fov=50.0,
             aspect=1.0,
             nearVal=0.01,
             farVal=20)
@@ -122,7 +120,6 @@ class MyRobot(PyBulletRobot):
             renderer=p.ER_BULLET_HARDWARE_OPENGL)
         
         return width, height, rgbImg, depthImg, segImg
-    
 
     def get_rectangle(self, GGCNN_output):
         #处理GGCNN输出，得到用于可视化的数据
@@ -149,7 +146,7 @@ class MyRobot(PyBulletRobot):
 
         #根据抓取点在图像中不同的位置来不断微调desired_position,每次微调下降0.1cm
 
-        desired_position = ee_position + 0.02*np.array([(column_index - 150)/300, (150 - row_index)/300, -0.05])
+        desired_position = ee_position + 0.01*np.array([(column_index - 150)/300, (150 - row_index)/300, -0.1])
 
         theta = np.arctan(sin2/cos2)/2        #是弧度并非角度
         current_orientation = p.getEulerFromQuaternion(self._get_ee_orientation())
@@ -162,7 +159,7 @@ class MyRobot(PyBulletRobot):
         new_joints_state = self._inverse_kinematics(desired_position, desired_orientation)
         print('Modifying......X:%.3f....Y:%.3f....theta:%.3f' % ((column_index - 150)/30000 , (150 - row_index)/30000 , theta_change))
         current_finger_width = self._get_finger_width()
-        current_finger_width += 0.001 if current_finger_width-0.1 < width else -0.001
+        current_finger_width += 0.001 if current_finger_width-0.08 < width else -0.001
 
         new_action = np.concatenate([new_joints_state[:7], np.array([current_finger_width/2,
                                                                      current_finger_width/2])])
@@ -173,52 +170,35 @@ class MyTask(Task):
     def __init__(self,sim):
         #在特定区域随机创建object和target
         super().__init__(sim)
-        path = 'F:\Franka_grasp-main\obj_models\\Nut&Bolt.obj'
-        mesh_scale = [7,7,7]
-        visual_shape_id = p.createVisualShape(
-            shapeType=p.GEOM_MESH,
-            fileName=path,
-            visualFramePosition=[0,0,0],
-            meshScale=mesh_scale  
-        )
-        collision_shape_id = p.createCollisionShape(
-            shapeType=p.GEOM_MESH,
-            fileName=path,
-            collisionFramePosition=[0,0,0],
-            meshScale=mesh_scale
-        )
-        self.objectId = p.createMultiBody(
-            baseMass=1,
-            baseCollisionShapeIndex=collision_shape_id,
-            baseVisualShapeIndex=visual_shape_id,
-            basePosition=[0.5, 0, 0.1],
-            useMaximalCoordinates=True
-        )
-        self.sim.create_box(body_name='target',
-                            half_extents=np.array([0.01,0.01,0.01]),
-                            mass=0,
-                            position=np.array([-0.5,-0.5,0.01]),
-                            ghost=True,
+        self.sim.create_box(body_name='object',
+                            half_extents=np.array([0.03,0.03,0.03]),
+                            mass=1,
+                            position=np.array([0.35,0.35,0.03]),
                             rgba_color=np.array([255,97,0,80]))
+        self.sim.create_box(body_name='target',
+                            half_extents=np.array([0.03,0.03,0.03]),
+                            mass=0,
+                            position=np.array([-0.5,-0.5,0.03]),
+                            ghost=True,
+                            rgba_color=np.array([255,255,255,100]),)
 
     def reset(self):
         #随机生成物体和目标点 '''---------------------------------------------------------------------------
         object_x = np.random.uniform(low=0.3, high=0.4, size=1)
-        object_y = np.random.uniform(low=-0.6, high=-0.5, size=1)
+        object_y = np.random.uniform(low=-0.6, high=-0.4, size=1)
         object_position = np.concatenate((object_x, object_y, np.array([0.03])))
-        object_orientation = np.random.uniform(low=-0.2,high=0.2,size=4)
-        object_orientation += np.array([0.0, 0.86, 0.00, -0.5]) 
+        object_orientation = np.random.uniform(low=-1,high=1,size=4)
         target_y = np.random.uniform(low=0.4, high=0.6, size=1)
-        target_position = np.concatenate((np.array([0.4]), target_y, np.array([0.01])))
+        target_position = np.concatenate((np.array([0.4]), target_y, np.array([0.03])))
         # target_orientation = np.random.uniform(low=-1,high=1,size=4)
         target_orientation = np.array([0,0,0,1])
-        p.resetBasePositionAndOrientation(self.objectId,object_position,object_orientation)
+        self.sim.set_base_pose(body='object', position=object_position, orientation=object_orientation)
         self.sim.set_base_pose(body='target',position=target_position,orientation=target_orientation)
 
     def get_obs(self):
         #返回物体的位置和目标点状态,前3位置后4姿态
-        object_position = p.getBasePositionAndOrientation(self.objectId, 0)[0]
-        object_orientation = p.getBasePositionAndOrientation(self.objectId, 0)[1]
+        object_position = self.sim.get_base_position(body='object')
+        object_orientation = self.sim.get_base_orientation(body='object')
         target_position = self.sim.get_base_position(body='target')
         target_orientation = self.sim.get_base_orientation(body='target')
         observation = np.concatenate((object_position,object_orientation,target_position,target_orientation))
@@ -226,8 +206,8 @@ class MyTask(Task):
     
     def get_achieved_goal(self):
         #返回物体目前的位置,前3位置后4姿态
-        position = p.getBasePositionAndOrientation(self.objectId, 0)[0]
-        orientation = p.getBasePositionAndOrientation(self.objectId, 0)[1]
+        position = self.sim.get_base_position(body='object')
+        orientation = self.sim.get_base_orientation(body='object')
         observation = np.concatenate((position,orientation))
         return observation 
     
@@ -297,17 +277,17 @@ class MyRobotTaskEnv(RobotTaskEnv):
         self.task = MyTask(sim)
         self.net = GGCNN().to(self.DEVICE)
         self.net.load_state_dict(torch.load('epoch_48_iou_0.88_statedict.pt'))  #加载训练好的权重
-        self.vis = vis
         self.stage = 0
         self.counter = 0
         self.time = 0
+        self.vis = vis
         super().__init__(self.robot,self.task)
 
     def get_action(self):
         #调整阶段
         self.time += 0.1
         if self.stage == 0.0:
-            desired_position = self.task.get_obs()[:3] + np.array([0, 0, 0.4])
+            desired_position = self.task.get_obs()[:3] + np.array([0, 0, 0.35])
             self.current_position = self.robot._get_ee_position()
             self.position_change = desired_position - self.current_position
             self.stage = 0.1
@@ -330,6 +310,8 @@ class MyRobotTaskEnv(RobotTaskEnv):
             depthImg = np.clip(2*(depthImg - depthImg.mean()), -1, 1) 
             GGCNN_input = torch.tensor(depthImg).unsqueeze(0).unsqueeze(0).to(self.DEVICE)
             GGCNN_output = self.net(GGCNN_input)
+            action = self.robot.processing_ggcnnOutput(GGCNN_output)
+            ee_position = self.robot._get_ee_position()
             if self.vis:
                 center_pos, theta, opening, jaw_size = self.robot.get_rectangle(GGCNN_output)
                 alpha = np.arctan(jaw_size/opening)
@@ -343,16 +325,15 @@ class MyRobotTaskEnv(RobotTaskEnv):
                                isClosed=True, color=(0,255,255), thickness=3)
                 cv2.imshow('image',rgbImg)
                 cv2.waitKey(10)
-            action = self.robot.processing_ggcnnOutput(GGCNN_output)
-            ee_position = self.robot._get_ee_position()
-            if ee_position[2] <= 0.2:       #只在摄像头高度大于15cm时微调,若小于这个距离,摄像头会失焦
-                self.stage = 2.0  
-                cv2.destroyAllWindows()  
+            if ee_position[2] <= 0.18:       #只在摄像头高度大于15cm时微调,若小于这个距离,摄像头会失焦
+                self.stage = 2.0   
+                cv2.destroyAllWindows()
+
             return action
 
         if self.stage == 2.0:
-            action_1 = self.robot._vertical_move(-0.0003)     #下降
-            if self.robot._get_ee_position()[2] < 0.03:
+            action_1 = self.robot._vertical_move(-0.001)     #下降
+            if self.robot._get_ee_position()[2] < 0.04:
                 self.stage = 3.0
                 self.stage_2_num = 0
             print('Downward......')
@@ -361,7 +342,7 @@ class MyRobotTaskEnv(RobotTaskEnv):
         if self.stage == 3.0:
             self.stage_2_num += 1
             action_2 = self.robot._grip(-0.0005)
-            if self.stage_2_num >= 300:
+            if self.stage_2_num >= 200:
                 self.stage = 4.0
                 self.stage_3_num = 0
                 self.finger_width = self.robot._get_finger_width()/2
@@ -373,11 +354,11 @@ class MyRobotTaskEnv(RobotTaskEnv):
         
         if self.stage == 4.0:
             self.stage_3_num += 1
-            action = self.robot._inverse_kinematics(self.ee_info[:3] + self.stage_3_num/500*self.position_change,
+            action = self.robot._inverse_kinematics(self.ee_info[:3] + self.stage_3_num/200*self.position_change,
                                                     self.ee_info[3:])
-            action_3 = np.concatenate([action[:7], np.array([self.finger_width-0.01,self.finger_width-0.01])])
+            action_3 = np.concatenate([action[:7], np.array([self.finger_width,self.finger_width])])
             print('Deliverying......')
-            if self.stage_3_num > 500:
+            if self.stage_3_num > 200:
                 self.stage = 5.0
             return action_3
 
@@ -430,7 +411,6 @@ if __name__ == "__main__":
         observation, reward, terminated, truncated, info = env.step(action)
         if terminated or truncated:
             observation, info = env.reset()
-
         
 
 
@@ -456,3 +436,23 @@ if __name__ == "__main__":
 
 
 
+
+
+    # env = MyRobotTaskEnv()
+    # observation, info = env.reset()
+
+    # for _ in range(10000):
+    #     FPS = False
+    #     if env.stage == 1.0:
+    #         FPS = True
+    #     if FPS:
+    #         time_1 = time.time()
+    #     action = env.get_action()
+    #     observation, reward, terminated, truncated, info = env.step(action)
+
+    #     if FPS:
+    #         time_2 = time.time()
+    #         print(1/(time_2-time_1))
+    #     if terminated or truncated:
+    #         observation, info = env.reset()
+        
